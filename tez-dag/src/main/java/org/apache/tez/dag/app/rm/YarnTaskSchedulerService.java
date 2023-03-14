@@ -363,7 +363,14 @@ public class YarnTaskSchedulerService extends TaskScheduler
     try {
       RegisterApplicationMasterResponse response;
       synchronized (this) {
+        //AMRMClientAsyncImpl
         amRmClient.start();
+        /**
+         *
+         Registers this application master with the resource manager.
+         On successful registration, starts the heartbeating thread.
+         *
+         */
         response = amRmClient.registerApplicationMaster(appHostName,
                                                         appHostPort,
                                                         appTrackingUrl);
@@ -517,12 +524,14 @@ public class YarnTaskSchedulerService extends TaskScheduler
 
     synchronized (this) {
       //是否重用container
+      //否
       if (!shouldReuseContainers) {
         List<Container> modifiableContainerList = Lists.newLinkedList(containers);
         assignedContainers = assignNewlyAllocatedContainers(
             modifiableContainerList);
       } else {
         // unify allocations
+        //是
         pushNewContainerToDelayed(containers);
         return;
       }
@@ -553,7 +562,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
     Map<CookieContainerRequest, Container> assignedContainers =
         new HashMap<CookieContainerRequest, Container>();
     //TaskScheduler AM不是完成状态
-
+    //container 分配给 assignedContainers
     if (!amInCompletionState) {
       assignNewContainersWithLocation(containers,
           NODE_LOCAL_ASSIGNER, assignedContainers);
@@ -633,6 +642,8 @@ public class YarnTaskSchedulerService extends TaskScheduler
     }
 
     if (state.equals(AMState.IDLE) || taskRequests.isEmpty()) {
+      //如果AM为空闲状态或者taskRequests为空
+
       // reset locality level on held container
       // if sessionDelay defined, push back into delayed queue if not already
       // done so
@@ -643,15 +654,19 @@ public class YarnTaskSchedulerService extends TaskScheduler
         // session mode and need to hold onto containers and not done so already
         determineMinHeldContainers();
       }
-      
+
+      //localityMatchLevel为NEW
       heldContainer.resetLocalityMatchLevel();
       long currentTime = System.currentTimeMillis();
       boolean releaseContainer = false;
-
+      //isNew||(过期时间<=现在时间&&idleContainerTimeoutMin ！= -1)
       if (isNew || (heldContainer.getContainerExpiryTime() <= currentTime
           && idleContainerTimeoutMin != -1)) {
         // container idle timeout has expired or is a new unused container. 
         // new container is possibly a spurious race condition allocation.
+        //可能是虚假的竞争条件
+
+        //如果在session模式&&sessionMinHeldContainers包含heldContainer
         if (getContext().isSession()
             && sessionMinHeldContainers.contains(heldContainer.getContainer().getId())) {
           // There are no outstanding requests. So its safe to hold new containers.
@@ -659,8 +674,11 @@ public class YarnTaskSchedulerService extends TaskScheduler
           // In session mode and container in set of chosen min held containers
           // increase the idle container expire time to maintain sanity with 
           // the rest of the code.
+
+          // 设置空闲container的过期时间
           heldContainer.setContainerExpiryTime(getHeldContainerExpireTime(currentTime));
-        } else {
+        }
+        else {
           releaseContainer = true;          
         }
       }
@@ -676,9 +694,12 @@ public class YarnTaskSchedulerService extends TaskScheduler
             + ", heldContainers=" + heldContainers.size()
             + ", delayedContainers=" + delayedContainerManager.delayedContainers.size()
             + ", isNew=" + isNew);
+        //释放UnassignedContainers
           releaseUnassignedContainers(
               Collections.singletonList((heldContainer.getContainer())));        
-      } else {
+      }
+      // !releaseContainer
+      else {
         // no outstanding work and container idle timeout not expired
         if (LOG.isDebugEnabled()) {
           LOG.debug("Holding onto idle container with no work. CId: "
@@ -694,7 +715,9 @@ public class YarnTaskSchedulerService extends TaskScheduler
                 + localitySchedulingDelay);
       }
     } else if (state.equals(AMState.RUNNING_APP)) {
+      //AM running
       // clear min held containers since we need to allocate to tasks
+      //
       if (!sessionMinHeldContainers.isEmpty()) {
         // update the expire time of min held containers so that they are
         // not released immediately, when new requests come in, if they come in 
@@ -704,9 +727,11 @@ public class YarnTaskSchedulerService extends TaskScheduler
           HeldContainer minHeldContainer = heldContainers.get(minHeldCId);
           if (minHeldContainer != null) {
             // check in case it got removed because of external reasons
+            //置过期
             minHeldContainer.setContainerExpiryTime(getHeldContainerExpireTime(currentTime));
           }
         }
+        //清除sessionMinHeldContainers
         sessionMinHeldContainers.clear();
       }
       HeldContainer.LocalityMatchLevel localityMatchLevel =
@@ -716,17 +741,20 @@ public class YarnTaskSchedulerService extends TaskScheduler
 
       Container containerToAssign = heldContainer.container;
 
+      //numAssignmentAttempts++;
       heldContainer.incrementAssignmentAttempts();
       // Each time a container is seen, we try node, rack and non-local in that
       // order depending on matching level allowed
 
       // if match level is NEW or NODE, match only at node-local
       // always try node local matches for other levels
+      //依次尝试节点、机架和非本地进行匹配
       if (isNew
           || localityMatchLevel.equals(HeldContainer.LocalityMatchLevel.NEW)
           || localityMatchLevel.equals(HeldContainer.LocalityMatchLevel.NODE)
           || localityMatchLevel.equals(HeldContainer.LocalityMatchLevel.RACK)
           || localityMatchLevel.equals(HeldContainer.LocalityMatchLevel.NON_LOCAL)) {
+        //
         assignReUsedContainerWithLocation(containerToAssign,
             NODE_LOCAL_ASSIGNER, assignedContainers, true);
         if (LOG.isDebugEnabled() && assignedContainers.isEmpty()) {
@@ -759,6 +787,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
         if ((reuseNonLocal || isNew) && (localitySchedulingDelay == 0
             || localityMatchLevel.equals(
                 HeldContainer.LocalityMatchLevel.NON_LOCAL))) {
+          //分配container，assignedContainers.put(assigned, container);
          assignReUsedContainerWithLocation(containerToAssign,
               NON_LOCAL_ASSIGNER, assignedContainers, false);
           if (LOG.isDebugEnabled() && assignedContainers.isEmpty()) {
@@ -781,6 +810,14 @@ public class YarnTaskSchedulerService extends TaskScheduler
         // if we are not being able to assign containers to pending tasks then 
         // we cannot avoid releasing containers. Or else we may not be able to 
         // get new containers from YARN to match the pending request
+        /**
+         * 如果达到最终到期时间，则释放容器不要释放新容器。RM可能不会给我们新的
+         *
+         * 假设过期时间大于所有局部延迟的总和。因此，如果我们达到了到期时间，那么我们已经尝试在所有位置级别进行分配。
+         *
+         * 我们面临无法保留最小容器的风险，但如果我们无法将容器分配给待定任务，那么我们就无法避免释放容器。
+         * 否则，我们可能无法从YARN获取新的容器来匹配 pending request
+         */
         if (!isNew && heldContainer.getContainerExpiryTime() <= currentTime
           && idleContainerTimeoutMin != -1) {
           LOG.info("Container's idle timeout expired. Releasing container"
@@ -861,7 +898,8 @@ public class YarnTaskSchedulerService extends TaskScheduler
       }
 
       return assignedContainers;
-    } else {
+    }
+    else {
       // ignore all other cases?
       LOG.warn("Received a request to assign re-used containers when AM was "
         + " in state: " + state + ". Ignoring request and releasing container"
@@ -1029,6 +1067,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
    *          the task to de-allocate.
    * @param taskSucceeded
    *          specify whether the task succeeded or failed.
+   *          task是否成功
    * @param endReason
    *          reason for the task ending
    * @return true if a container is assigned to this task.
@@ -1043,6 +1082,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
       CookieContainerRequest request = removeTaskRequest(task);
       if (request != null) {
         // task not allocated yet
+        //task没有分配container
         LOG.info("Deallocating task: " + task + " before allocation");
         return false;
       }
@@ -1060,11 +1100,13 @@ public class YarnTaskSchedulerService extends TaskScheduler
         }
 
         if (!taskSucceeded || !shouldReuseContainers) {
+          //task没有成功或者 container不重用
           if (LOG.isDebugEnabled()) {
             LOG.debug("Releasing container, containerId=" + container.getId()
                 + ", taskSucceeded=" + taskSucceeded
                 + ", reuseContainersFlag=" + shouldReuseContainers);
           }
+          //释放
           releaseContainer(container.getId());
         } else {
           // Don't attempt to delay containers if delay is 0.
@@ -1768,6 +1810,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
     }
     
     CookieContainerRequest assigned =
+            //assignReUsedContainer
       assigner.assignReUsedContainer(container, honorLocality);
     if (assigned != null) {
       assignedContainers.put(assigned, container);
@@ -2028,6 +2071,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
         // test only sleep to prevent tight loop cycling that makes tests stall
         if (drainedDelayedContainersForTest != null) {
           try {
+            //prevent tight loop cycling
             Thread.sleep(100);
           } catch (InterruptedException e) {
             e.printStackTrace();
@@ -2049,6 +2093,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
             // Remove the container and try scheduling it.
             // TEZ-587 what if container is released by RM after this
             // in onContainerCompleted()
+            //取队首元素
             delayedContainer = delayedContainers.poll();
             if (delayedContainer == null) {
               continue;
@@ -2086,7 +2131,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
       releasePendingContainers();
     }
     
-    private void doAssignAll() {
+    private void  doAssignAll() {
       // The allocatedContainers queue should not be modified in the middle of an iteration over it.
       // Synchronizing here on TaskScheduler.this to prevent this from happening.
       //加锁防止allocatedContainers队列被修改
@@ -2115,21 +2160,24 @@ public class YarnTaskSchedulerService extends TaskScheduler
         while(iter.hasNext()) {
           HeldContainer delayedContainer = iter.next();
           if (!heldContainers.containsKey(delayedContainer.getContainer().getId())) {
+            //heldContainers队列里没有，就跳过
             // this container is no longer held by us
             // non standard scenario
             LOG.info("AssignAll - Skipping delayed container as container is no longer"
                   + " running, containerId="
                   + delayedContainer.getContainer().getId());
+            //从delayedContainer队列里删除
             iter.remove();
           }
         }
+
         assignedContainers = tryAssignReUsedContainers(
           new ContainerIterable(delayedContainers));
       }
       // Inform app
       informAppAboutAssignments(assignedContainers);
     }
-    
+
     /**
      * Indicate that an attempt should be made to allocate all available containers.
      * Intended to be used in cases where new Container requests come in 
@@ -2158,6 +2206,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
     void addDelayedContainer(Container container,
         long nextScheduleTime) {
       HeldContainer delayedContainer = heldContainers.get(container.getId());
+      //delayedContainer列表为空
       if (delayedContainer == null) {
         LOG.warn("Attempting to add a non-running container to the"
             + " delayed container list, containerId=" + container.getId());
@@ -2176,6 +2225,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
       }
       boolean added =  false;
       synchronized(this) {
+        //添加delayedContainers队列
         added = delayedContainers.offer(delayedContainer);
         if (drainedDelayedContainersForTest != null) {
           synchronized (drainedDelayedContainersForTest) {
@@ -2185,6 +2235,7 @@ public class YarnTaskSchedulerService extends TaskScheduler
         this.notify();
       }
       if (!added) {
+        //如果没插入到添加delayedContainers队列，就把这些container都释放了
         releaseUnassignedContainers(Lists.newArrayList(container));
       }
     }
